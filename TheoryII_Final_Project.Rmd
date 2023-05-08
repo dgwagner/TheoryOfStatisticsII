@@ -23,6 +23,10 @@ library(parallel)
 
 ## Executive Summary
 
+Permutation tests are gaining in popularity due to the lack of parametric assumptions, the exact nature of the tests, and increasing computational feasibility. However, little research exists characterizing the power of permutation tests. In a 2022 paper, Kim *et al.* introduced a general method of assessing the minimax optimality of permutation tests and proved multiple permutation procedures to be minimax rate optimal with respect to power. Taking an empirical research direction, we demonstrate the power performance of two permutation tests against counterparts that depend on large sample approximation theory, namely the $t$-test and the Kolmogorov-Smirnov test.
+
+Data from the MLB players dataset are analyzed to compare the means and distributions of heights between players of different positions. Positions that are known to differ in height distribution from prior research are selected so as to permit the assumption that true differences exist between the two group distributions. We find that the Fisher-Pitman permutation test has similar power performance to the $t$-test, while a permutation test for density testing considerably outperforms the Kolmogorov-Smirnov test with respect to power. The implications of this research are to increase confidence in permutation tests as sufficiently powerful tools to be used in applied settings.
+
 \newpage
 
 ## Project Description
