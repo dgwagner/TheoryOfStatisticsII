@@ -1,0 +1,427 @@
+---
+title: 'Final Project: Minimax Optimality of Permutation Tests'
+author: "Derek Wagner"
+date: "4/25/2023"
+header-includes:
+    - \usepackage{titling}
+    - \usepackage{setspace}\doublespacing
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(kableExtra)
+library(lsr)
+library(coin)
+library(sm)
+library(parallel)
+```
+
+\newpage
+
+## Executive Summary
+
+\newpage
+
+## Project Description
+
+### Literature Review
+
+Permutation tests are nonparametric hypothesis tests that leverage sample data to create a null distribution of the test statistic in the absence of information about the underlying population. These tests are popular for the limited assumptions required for their use and a number of valuable properties. However, little research has been done to assess the power of permutation tests, which cannot be as easily calculated as that for parametric hypothesis tests like the two-sample *t*-test. The paper "Minimax Optimality of Permutation Tests" by Kim, Balakrishnan, and Wasserman (2022) introduces a general method of determining the minimax rate optimality of permutation tests and provides multiple specific examples.
+
+First, an introduction to the permutation testing approach is warranted. In parametric hypothesis testing, the sampling distribution is assumed to be normally distributed due to the central limit theorem (Wasserman, p. 77). The large sample theory assumptions and approximations required of parametric tests are not required for permutation tests, which are exact procedures (p. 161). Instead, the values of the response are resampled without replacement (or "re-shuffled," colloquially) in their assignments to the feature values many times. A certain test statistic, such as a sample mean or median, is then calculated for each permutation, and the distribution of this resampled test statistic is called the permutation distribution (p. 162). This permutation distribution serves as the null distribution for the hypothesis test. Critical values for the test can be set exactly at level $\alpha$ by taking the appropriate percentile of the permutation distribution. For example, consider the following hypothesis test:
+
+$$H_0: \mu_A=\mu_B$$
+$$H_1: \mu_A > \mu_B$$
+
+A test statistic $D$ can be defined as the difference in the means of groups $A$ and $B$. By taking the $(1-\alpha)*100$ percentile of the permutation distribution, the critical value for rejecting $H_0$ and stating that $\mu_A>\mu_B$ is found.
+
+The only assumption required of the permutation test is that of exchangeability (Berk, 2021). Per Berk, "a sequence is exchangeable if any permutation of that sequence has the same joint probability distribution as the original." A common example of non-exchangeable data are time series data. However, this is outside the focus of this paper. For the rest of the paper, it will be assumed that, under the null hypothesis, any permutation of the response values is equally likely.
+
+Due to the nonparametric nature of permutation tests, the power of permutation tests is not as easily computable as that for tests built upon central limit theory. In their 2022 paper, Kim *et al.* do not present a generic calculation for a permutation test's power, but they do advance a key finding: they produce a general method for determining the minimax optimality of a permutation test. They call their procedure the "two moments method" (Lemma 3.1) as it depends on the first two moments of the test statistic. Their proof "roughly says that if the expected value of $T_n$ (say, signal) is much larger than the expected value of the permuted statistic $T^{\pi}_n$ (say, baseline) as well as the variances of $T_n$ and $T^{\pi}_n$ (say, noise), then the permutation
+test will have nontrivial power" (p. 233). Thus, there exists a sufficient condition such that the permutation test controls both Type I and Type II error rates (and thus power), just as parametric tests do.
+
+Minimax theory was covered in Module 7 of the course. An estimator is minimax if it minimizes the maximum risk of all possible estimators. With regards to power, the authors define the Type II error rate to be the risk function, and thus minimax risk is choosing a test statistic such that the maximum Type II error rate is minimized. The parameter that changes when determining Type II error is the true difference or *separation* between the two underlying distributions. If this separation is large, then the power of a test is large as the likelihood of rejecting the null hypothesis with some criterion $\alpha$ is high. Conversely, if the separation is small, then the power of the test is smaller. Thus, to be minimax optimal for power, a test must minimize the maximum Type II error rate over all possible separation values. The minimum separation value at which Type II error becomes nontrivial is denoted by Kim *et al* as $\epsilon_n$. The authors note that since finding exact minimax risk is often computationally infeasible, they use minimax rate optimality, which is nonasymptotic and holds for all $n$.
+
+Kim *et al.* go on to demonstrate their method by assessing degenerate $U$-statistics in two-sample, multinomial, and density testing problems. While $U$-statistics were covered in this course, this paper will not follow that line of study from Kim *et al.* due to the scope of this project. Rather, this paper seeks to empirically validate the minimax rate optimality of permutation tests in a simpler problem, the two-sample difference of means test, as well as a density testing problem via comparison of a permutation procedure to the well-known Kolmogorov-Smirnov (K-S) test.
+
+### Data Description
+
+The MLB players dataset contains 1,033 complete records of the ages, heights, and weights of players currented rostered in Major League Baseball, in addition to their names, positions, and affiliated teams. It is already known that professional baseball players are selected in part for their physical characteristics: namely, pitchers tend to be taller than other players, infielders (paricularly shortstops and second basemen) tend to be shorter and leaner to facilitate greater speed, and power hitters tend to be heavier. Per Greenberg (2010), the height of a starting pitcher does not predict the pitcher's performance given that they are an MLB starting pitcher, but it does help predict whether or not a pitcher becomes an established starting pitcher in the MLB. This suggests that physical characteristics are selection criteria in determining who plays in the MLB, and thus it can be reasonably assumed that real differences in the distributions of height and weight exist between position groups whose roles self-select for different characteristics. 
+
+Summary statistics for each position group in the MLB dataset are shown in the table below. The mean heights and mean weights are given, as well as the mean BMI, which is a composite measurement of height and weight.
+
+```{r echo=FALSE, warning=FALSE}
+mlb = read.csv("C:/Users/wagnedg1/Documents/EP/mlb_players.csv")
+mlb = na.omit(mlb)
+mlb = mlb%>%rename("Height" = "Height.inches.", "Weight"="Weight.lbs.")
+mlb = mlb%>%mutate(BMI = 703*Weight/(Height^2))
+mlb$Position = as.factor(mlb$Position)
+second_bs = mlb%>%filter(Position==" Second Baseman")
+catchers = mlb%>%filter(Position==" Catchers")
+starting_pitchers = mlb%>%filter(Position==" Starting Pitcher")
+perm_sp_and_2b = mlb%>%filter(Position%in%c(" Starting Pitcher"," Second Baseman"))
+perm_sp_and_ct = mlb%>%filter(Position%in%c(" Starting Pitcher"," Catcher"))
+```
+```{r echo=FALSE}
+kable(mlb%>%group_by(Position)%>%summarize("Count" = n(),
+                                     "Mean Height" = mean(Height),
+                                     "Mean Weight" = mean(Weight),
+                                     "Mean BMI" = mean(BMI)))%>%
+  kable_styling(position = "center", latex_options="HOLD_position")
+```
+Due to the likelihood that real differences in height and/or weight do exist between position groups, the MLB players dataset provides an ideal test case to empirically assess the minimax optimality of permutation tests against parametric tests with respect to power. Specifically, since starting pitchers (heretofore referred to as "pitchers," since relief pitchers will not be considered) are selected for height per Greenberg, and catchers are not selected for height in the same way, the difference in heights between pitchers and catchers will be the primary exemplar for this analysis. It will be assumed that there does truly exist a difference between the height distributions of these two positions.
+
+## Methods
+
+### Two-Sample Difference of Means Testing
+
+For the two-sample difference of means problem, the standard parametric procedure is the $t$-test. The $t$-test calculates a statistic $T$ from the data using the following formula (assuming unequal variances):
+
+$$T = \frac{(\bar{x}_1-\bar{x}_2)-(\bar{\mu}_1-\bar{\mu}_2)}{\sqrt{\frac{s_1^2}{n_1}+\frac{s_2^2}{n_2}}}$$
+
+Due to central limit theory, the $T$-statistic is held to follow a $t$-distribution with $n_1+n_2-2$ degrees of freedom. The permutation-based counterpart to the $t$-test is the Fisher-Pitman permutation test (evaluated via the `coin` package in R in this paper) (Neuhauser and Manly, 2004).
+
+It can be observed in Figure 1 that neither the heights of the pitchers nor the heights of the catchers in the MLB dataset are normally distributed. While the distribution for pitchers may appear roughly normal, the Shapiro-Wilk Test for Normality rejects the null hypothesis that the distribution is normal ($p<0.001$).
+
+```{r echo=F, fig.cap="Distribution of Heights by Position", fig.align = 'center', out.width = "60%"}
+ggplot(data=perm_sp_and_ct, mapping=aes(x=Height))+
+  facet_wrap(vars(Position))+
+  geom_density(size=1.5)+ylab("Density")
+```
+
+As this is the case, then for small sample sizes, the $t$-test becomes more and more unsuitable due to the inversion of the Central Limit Theorem (i.e. the large sample approximations break down). However, the permutation test should remain just as fit, though power for both tests is expected to decrease with decreasing sample size.
+
+Assuming that there exists a true difference in the height distributions for pitchers and catchers, it is possible to empirically estimate the power of both the $t$-test and the Fisher-Pitman test via simulation. From each position group, a smaller random sample (without replacement) is taken, and both tests are performed on these two smaller samples. Setting $\alpha=0.05$, the test decision (reject/not reject) is recorded for each test. This procedure is repeated 100 times at reduced group sample sizes of $n_i=\{50,45,40,...,10,5\}$. Thus, at each reduced sample size, an estimate of the power is given for each test as the proportion of runs where $H_0$ was rejected.
+
+### Density Testing
+
+While the two-sample difference of means problem investigates whether two samples come from distributions with different means, the goal of density testing is more general. Density testing investigates whether two samples come from different distributions. This entails both the mean and the variance of the underlying distributions, as well as the shape. Figure 1 shows that the height distributions of the pitchers and second basemen differ both in mean and in shape, as the distribution for catchers is bimodal while the distribution for pitchers is unimodal and roughly symmetric.
+
+One of the most common hypothesis tests for density testing is the Kolmogorov-Smirnov (K-S) test. The K-S test is itself a non-parametric test, though it is not a permutation test. However, the K-S test does have a similar issue as parametric tests in that it is dependent on a limiting distribution and thus requires larger sample sizes to become more powerful (Raviv, 2018).
+
+The R package `sm` contains functionality for a permutation test for equality of densities (Raviv). The procedure first creates density estimates using kernel smoothing methods (another topic covered in this course) and then performs the permutation test with those estimates. Per the R documentation, the methods involved are described in Section 6.2 of Bowman and Azzalini (1997). For the purposes of this paper, the specifics of this permutation test will not be unpacked; it is sufficient to know that it is analogous to the K-S test.
+
+The same reduced sampling procedure will be followed as described above for the two-sample difference of means comparison. The power estimates for the K-S test and the permutation test will be compared.
+
+## Results
+
+### Two-Sample Difference of Means Testing
+
+The estimated power curves for the $t$-test and the Fisher-Pitman permutation test are shown in Figure 2. The curves are almost identical; this shows that the empirical power for the two tests is very similar. The permutation test power estimates are slightly lower in some places than those of the $t$-test, but for functional purposes these differences are not meaningful. 
+```{r echo=FALSE}
+one_way_t <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      t = oneway.test(Height~Position, data=sampled)
+      if (t$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      t = oneway.test(Height~Position, data=data)
+      if (t$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_t_test <- sapply(n_list, one_way_t, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+t_test_df = data.frame(
+  n = n_list,
+  p = ps_for_t_test
+)
+```
+```{r echo=FALSE}
+one_way_perm <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      t = oneway_test(Height~Position, data=sampled)
+      if (pvalue(t) < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      t = oneway_test(Height~Position, data=data)
+      if (pvalue(t) < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_perm_test <- sapply(n_list, one_way_perm, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+perm_test_df = data.frame(
+  n = n_list,
+  p = ps_for_perm_test
+)
+```
+```{r echo=F, fig.cap="Plot of empirical power by group sample size for *t*-test (blue) vs permutation test (red) when testing for difference in mean heights.", fig.align = 'center', out.width = "80%"}
+ggplot()+
+  geom_point(data=t_test_df, aes(x=n, y=p), color="blue")+
+  geom_line(data=t_test_df, aes(x=n, y=p), color="blue")+
+  geom_point(data=perm_test_df, aes(x=n, y=p), color="red")+
+  geom_line(data=perm_test_df, aes(x=n, y=p), color="red")+
+  xlab("Sample Size per Group")+
+  ylab("Probability of Rejecting Null Hypothesis")+
+  scale_x_reverse()
+```
+Theoretically, however, it does show that the permutation test does not have a minimax advantage over the $t$-test; this is because the $T$-statistic, being built off of the maximum likelihood estimator $\bar{X}$, is itself minimax under large sample approximation (Wasserman, p. 201). However, as the underlying distributions are not normal as is assumed for the $t$-test, then having a permutation test that has near-equivalent power is beneficial: per Wasserman, "if the model is wrong, the MLE may no longer be optimal" (p. 131).
+
+To validate the findings under the two-sample difference of means problem, the same power curves are built for testing the difference in mean BMI between pitchers and catchers, which will also be assumed to be truly different. The resulting curves are seen in Figure 3, and they validate that the tests perform similarly with respect to power even in a case where the separation between the group distributions is smaller.
+
+```{r echo=F}
+one_way_t <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      t = oneway.test(BMI~Position, data=sampled)
+      if (t$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      t = oneway.test(BMI~Position, data=data)
+      if (t$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_t_test_bmi <- sapply(n_list, one_way_t, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+t_test_df_bmi = data.frame(
+  n = n_list,
+  p = ps_for_t_test_bmi
+)
+one_way_perm <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      t = oneway_test(BMI~Position, data=sampled)
+      if (pvalue(t) < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      t = oneway_test(BMI~Position, data=data)
+      if (pvalue(t) < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_perm_test_bmi <- sapply(n_list, one_way_perm, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+perm_test_df_bmi = data.frame(
+  n = n_list,
+  p = ps_for_perm_test_bmi
+)
+```
+```{r echo=F, fig.cap="Plot of empirical power by group sample size for *t*-test (blue) vs permutation test (red) when testing for difference in mean BMI.", fig.align = 'center', out.width = "80%"}
+ggplot()+
+  geom_point(data=t_test_df_bmi, aes(x=n, y=p), color="blue")+
+  geom_line(data=t_test_df_bmi, aes(x=n, y=p), color="blue")+
+  geom_point(data=perm_test_df_bmi, aes(x=n, y=p), color="red")+
+  geom_line(data=perm_test_df_bmi, aes(x=n, y=p), color="red")+
+  xlab("Sample Size per Group")+
+  ylab("Probability of Rejecting Null Hypothesis")+
+  scale_x_reverse()
+```
+
+### Density Testing
+
+```{r echo=F, warning=F, message=F}
+ks_sim <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      ks = ks.test(sample_1$Height, sample_2$Height)
+      if (ks$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      ks = ks.test(sample_1$Height, sample_2$Height)
+      if (ks$p.value < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_ks_test <- sapply(n_list, ks_sim, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+ks_test_df = data.frame(
+  n = n_list,
+  p = ps_for_ks_test
+)
+```
+
+```{r echo=FALSE, message=F, warning=F, eval=F}
+# Code to run permutation density test
+# This takes some time, so I saved the results to a csv and set this chunk as 'eval=F'
+perm_sim <- function(n=NULL, data, position1, position2){
+  decs = c()
+  for (i in seq(1,100,1)){
+    set.seed(i)
+    pos1_df = data%>%dplyr::filter(Position==position1)
+    pos2_df = data%>%dplyr::filter(Position==position2)
+    if (is.null(n)==FALSE){
+      sample_1 = pos1_df[sample(nrow(pos1_df), size=n, replace=FALSE), ]
+      sample_2 = pos2_df[sample(nrow(pos2_df), size=n, replace=FALSE), ]
+      sampled = rbind(sample_1, sample_2)
+      sim = sm.density.compare(sampled$Height, sampled$Position, model="equal", nboot= 500, ngrid= 100, display='none')
+      if (sim$p < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    } else {
+      sim = sm.density.compare(sampled$Height, sampled$Position, model="equal", nboot= 500, ngrid= 100, display='none')
+      if (sim$p < .05){
+        dec=1
+      } else {
+        dec=0
+      }
+      decs = append(decs, dec)
+    }
+  }
+  return(mean(decs))
+}
+
+n_list = c(50,45,40,35,30,25,20,15,10,5)
+ps_for_sim_test <- mclapply(n_list, perm_sim, data=mlb, position1=" Starting Pitcher", position2=" Catcher")
+
+```
+```{r echo=F, eval=F}
+ps_for_sim_test_2 <- unlist(ps_for_sim_test)
+sim_test_df = data.frame(
+  n = n_list,
+  p = ps_for_sim_test_2
+)
+write.csv(sim_test_df, "sim_test_df.csv")
+```
+
+```{r echo=F}
+sim_test_df = read.csv("sim_test_df.csv")
+```
+```{r echo=F, fig.cap="Plot of empirical power by group sample size for KS-test (blue) vs permutation test (red) when testing for difference in densities.", fig.align = 'center', out.width = "80%"}
+ggplot()+
+  geom_point(data=ks_test_df, aes(x=n, y=p), color="blue")+
+  geom_line(data=ks_test_df, aes(x=n, y=p), color="blue")+
+  geom_point(data=sim_test_df, aes(x=n, y=p), color="red")+
+  geom_line(data=sim_test_df, aes(x=n, y=p), color="red")+
+  xlab("Sample Size per Group")+
+  ylab("Probability of Rejecting Null Hypothesis")+
+  scale_x_reverse()
+```
+
+Returning to the comparison of heights between pitchers and catchers, Figure 4 shows the empirical power estimates of the K-S test against those of the permutation density test. In contrast to the relationship between the $t$-test and the Fisher-Pitman permutation test, the density permutation test appears to strictly dominate the K-S test with respect to power. While the K-S test power estimate falls to 0.76 at $n=35$, the density permutation test power estimate remains high (0.91). The practical implication of such a finding is apparent: the density permutation test is more powerful (thus reducing the likelihood of a Type II error) than the popular K-S test, whose dependence on large sample sizes is a known limitation. 
+
+## Conclusions
+
+Kim *et al.* introduced their method of assessing the minimax optimality of permutation tests with respect to power in order to fill an important need in statistical literature. The need to understand the power of permutation tests is relevant to the general application and confidence in these procedures among the statistical community. Considering the counterfactual that permutation tests had poor power relative to parametric counterparts, then statisticians would face a difficult decision when dealing with data that fail to satisfy central limit theoretical assumptions: choose parametric procedures that depend upon "wrong" models, or choose permutation procedures that have poor power and take on undesirable effects such as increased costs in experimental designs or higher rate of inconclusive research findings.
+
+The results of this paper demonstrate that permutation test are desirable alternatives to tests that depend upon large sample approximation, parametric or otherwise. The Fisher-Pitman permutation test was shown to have similar empirical power performance to the $t$-test for an application with non-normal underlying data, and a density permutation test was shown to considerably outperform the K-S test with respect to power. 
+
+Further research that would logically proceed from the findings of this paper may include the direct application of the "two-moments" method from Kim *et al* to the Fisher-Pitman and density permutation procedures discussed in this paper, as the scope of this paper was to conduct an anecdotal investigation of empirical performance. Additionally, the power estimation method used in this paper could be extrapolated to form a power analysis methodology for permutation tests based on simulation. As power analysis for parametric tests incorporate assumptions about the true difference that is to be detected, general assumptions about the distributions underlying a given permutation test could be used to simulate data and then perform permutation tests at different sample sizes. While this may be computationally expensive in some cases, it could aid in the application of permutation testing to more formally-designed experiments.
+
+## Appendix
+
+For access to the code and datasets used in this paper, please view the following GitHub repository:
+\newline
+<https://github.com/dgwagner/TheoryOfStatisticsII>
+\newline
+The analysis code written in R is included throughout this RMarkdown file.
+
+## Bibliography
+
+| Berk, M. (2021, September 21). *How to use permutation tests*. Medium.
+|   Retrieved May 6, 2023, from https://towardsdatascience.com/how-to-use-permutation-tests-bacc79f45
+|   749#:~:text=Permutation%20tests%20are%20non%2Dparametric%20tests%20that
+|   %20solely%20rely%20on,that%20of%20our%20observed%20data. 
+
+| Bowman, A.W. & Azzalini, A. (1997). *Applied Smoothing Techniques for Data Analysis: the Kernel Approach*
+|   *with S-Plus Illustrations*. Oxford University Press, Oxford.
+
+| Greenberg, G. P. (2010). Does A Pitcher's Height Matter? 
+|   *Baseball Research Journal*. <https://sabr.org/journal/article/does-a-pitchers-height-matter/>
+
+| Kim, I., Balakrishnan, S., & Wasserman, L. (2022). Minimax optimality of permutation tests. 
+|   *The Annals of Statistics*, *50*(1). https://doi.org/10.1214/21-aos2103 
+
+| Neuhauser, M., & Manly, B. F. (2004). The fisher-pitman permutation test when testing for differences in
+|   mean and variance. *Psychological Reports*, *94*(1), 189–194. https://doi.org/10.2466/pr0.94.1.189-194 
+
+| Raviv, E. (2018, October 8). *Test of equality between two densities*. Eran Raviv. 
+|   Retrieved May 6, 2023, from https://eranraviv.com/test-of-equality-between-two-densities/ 
